@@ -10,13 +10,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # 安装依赖（当前无 requirements.txt）
-pip install langgraph langchain-openai langchain-core python-dotenv
+pip install langgraph langchain-openai langchain-core python-dotenv python-docx
 
-# 运行交互式工作流
+# 传需求文档文件（支持 .txt / .md / .docx）
+python main.py 需求文档.md
+
+# 不传文件则交互式输入
 python main.py
 ```
 
 暂无测试、lint 或格式化配置。
+
+工作流结束后，产出自动保存到 `output/` 目录：
+- `requirement.md` — 需求分析文档
+- `design.md` — 技术设计文档
+- `<项目文件>` — 开发者按 `### FILE: <path>` 格式输出的完整项目，`main.py` 自动解析并还原目录结构
+- `delivery_report.md` — 项目交付报告
 
 ## 架构
 
@@ -27,9 +36,9 @@ main.py → graph.py → agents.py → state.py
 ```
 
 - **`state.py`** — `WorkflowState` TypedDict。保存所有产出物（`requirement`、`design`、`code`、`review_result`、`test_result`、`delivery_report`）以及 `retry_count` 和 `max_retries`。
-- **`agents.py`** — 六个 Agent 函数，每个接收 state 并返回 state 更新字典。模块级共享一个 `ChatOpenAI` 实例（通过 OpenAI 兼容 API 调用 DeepSeek，`temperature=0.3`）。`_extract_result()` 用正则从 LLM 输出中提取 `[RESULT: pass/fail]`。
+- **`agents.py`** — 六个 Agent 函数。developer 严格遵循架构师的技术选型（不再硬编码 Python），按 `### FILE: <path>` 格式输出多文件项目；reviewer/tester 检查项目可运行性和完整性。
 - **`graph.py`** — `build_graph()` 构建包含六个节点的 `StateGraph`。在 `reviewer` 和 `tester` 节点设有条件边，失败时回到 `developer` 重试（最多 `max_retries` 次，默认 3）。`route_after_review()` 和 `route_after_test()` 在 `retry_count >= max_retries` 时强制继续前进。
-- **`main.py`** — 交互式 CLI 入口。提示用户输入需求（默认："实现一个用户登录注册系统"），流式执行图工作流，以中文标题打印各阶段产出物。
+- **`main.py`** — CLI 入口。支持传需求文档（`.txt` / `.md` / `.docx`）。`parse_files()` 解析多文件输出并还原目录结构，`save_outputs()` 保存到 `output/`。
 
 ## 工作流图
 

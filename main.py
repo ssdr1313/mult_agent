@@ -1,8 +1,55 @@
 import argparse
+import re
 from pathlib import Path
 
+from docx import Document
 from langchain_core.messages import HumanMessage
 from graph import build_graph
+
+OUTPUT_DIR = Path("output")
+
+
+def read_document(path: Path) -> str:
+    """读取文档文件，支持 .txt/.md（纯文本）和 .docx（Word 文档）"""
+    if path.suffix.lower() == ".docx":
+        doc = Document(path)
+        return "\n".join(p.text for p in doc.paragraphs)
+    return path.read_text(encoding="utf-8")
+
+
+def parse_files(text: str) -> list[tuple[str, str]]:
+    """从多文件输出中解析文件列表，返回 [(路径, 内容), ...]"""
+    # 匹配 ### FILE: <path> 后紧跟代码块
+    pattern = r"###\s*FILE:\s*(\S+)\s*\n\s*```\w*\s*\n(.*?)```"
+    matches = re.findall(pattern, text, re.DOTALL)
+    if matches:
+        return [(path.strip(), content.strip()) for path, content in matches]
+    # 兼容旧格式：单文件输出
+    match = re.search(r"```(?:python|java|go|ts|js|tsx|jsx)?\s*\n(.*?)```", text, re.DOTALL)
+    if match:
+        return [("code.py", match.group(1).strip())]
+    return [("code.py", text)]
+
+
+def save_outputs(state: dict):
+    """将工作流产出保存到 output/ 目录"""
+    OUTPUT_DIR.mkdir(exist_ok=True)
+
+    if state.get("requirement"):
+        (OUTPUT_DIR / "requirement.md").write_text(state["requirement"], encoding="utf-8")
+    if state.get("design"):
+        (OUTPUT_DIR / "design.md").write_text(state["design"], encoding="utf-8")
+    if state.get("code"):
+        files = parse_files(state["code"])
+        for file_path, content in files:
+            target = OUTPUT_DIR / file_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+        print(f"  生成 {len(files)} 个文件")
+    if state.get("delivery_report"):
+        (OUTPUT_DIR / "delivery_report.md").write_text(state["delivery_report"], encoding="utf-8")
+
+    print(f"\n产出已保存到 {OUTPUT_DIR.resolve()}/")
 
 PHASE_NAMES = {
     "product": "需求分析",
@@ -51,7 +98,7 @@ def main():
     print()
 
     if args.file:
-        user_input = args.file.read_text(encoding="utf-8").strip()
+        user_input = read_document(args.file).strip()
         if not user_input:
             print("错误：文件内容为空")
             return
@@ -65,6 +112,7 @@ def main():
     print(f"\n开始处理需求: {user_input[:80]}{'...' if len(user_input) > 80 else ''}\n")
 
     prev_phase = None
+    full_state = {}
     for event in graph.stream(
         {
             "messages": [HumanMessage(content=user_input)],
@@ -83,15 +131,13 @@ def main():
         stream_mode="updates",
     ):
         for node_name, state_update in event.items():
+            full_state.update(state_update)
             phase = state_update.get("phase", "")
             if phase and phase != prev_phase:
-                # 合并当前 state 用于打印
-                merged = {
-                    **({} if prev_phase is None else {}),
-                    **state_update,
-                }
                 print_phase(phase, state_update)
                 prev_phase = phase
+
+    save_outputs(full_state)
 
     print("\n" + "=" * 60)
     print("  工作流执行完毕")
