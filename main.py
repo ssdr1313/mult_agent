@@ -1,3 +1,6 @@
+import argparse
+from pathlib import Path
+
 from langchain_core.messages import HumanMessage
 from graph import build_graph
 
@@ -34,17 +37,32 @@ def print_phase(phase: str, state: dict):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="多 Agent 协作工作流")
+    parser.add_argument(
+        "file", nargs="?", type=Path,
+        help="需求文档路径（不传则交互式输入）",
+    )
+    args = parser.parse_args()
+
     print("=" * 60)
     print("  多 Agent 协作工作流")
     print("  需求分析 → 设计 → 代码生成 → 审查 → 测试 → 交付")
     print("=" * 60)
     print()
-    user_input = input("请输入你的需求: ").strip()
-    if not user_input:
-        user_input = "实现一个用户登录注册系统"
+
+    if args.file:
+        user_input = args.file.read_text(encoding="utf-8").strip()
+        if not user_input:
+            print("错误：文件内容为空")
+            return
+        print(f"已读取需求文档: {args.file}")
+    else:
+        user_input = input("请输入你的需求: ").strip()
+        if not user_input:
+            user_input = "实现一个用户登录注册系统"
 
     graph = build_graph()
-    print(f"\n开始处理需求: {user_input}\n")
+    print(f"\n开始处理需求: {user_input[:80]}{'...' if len(user_input) > 80 else ''}\n")
 
     prev_phase = None
     for event in graph.stream(
