@@ -10,9 +10,11 @@ class WorkflowState(TypedDict):
     requirement: str
     design: str
     code: str
+    execution_result: str   # "pass" | "fail" — 实际编译运行结果
+    execution_log: str      # 编译运行的 stdout+stderr
     review_result: str      # "pass" | "fail"
     review_comment: str
-    test_result: str         # "pass" | "fail"
+    test_result: str        # "pass" | "fail"
     test_report: str
     delivery_report: str
     # 重试计数

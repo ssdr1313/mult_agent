@@ -1,5 +1,10 @@
 import os
 import re
+import shutil
+import subprocess
+import time
+from pathlib import Path
+
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -59,6 +64,8 @@ def architect_agent(state: WorkflowState) -> dict:
 def developer_agent(state: WorkflowState) -> dict:
     """开发者：代码生成"""
     feedback = ""
+    if state.get("execution_result") == "fail":
+        feedback += f"\n\n⚠️ 代码编译/运行失败，请根据以下错误日志修复：\n{state['execution_log']}"
     if state.get("review_result") == "fail":
         feedback += f"\n\n⚠️ 代码审查不通过，请根据以下意见修复：\n{state['review_comment']}"
     if state.get("test_result") == "fail":
@@ -98,6 +105,192 @@ def developer_agent(state: WorkflowState) -> dict:
         "phase": "review",
         "retry_count": state.get("retry_count", 0) + 1,
     }
+
+
+EXEC_DIR = Path("output/.exec")
+
+
+def _parse_code_files(code: str) -> list[tuple[str, str]]:
+    """从多文件代码中解析文件列表，返回 [(路径, 内容), ...]"""
+    pattern = r"###\s*FILE:\s*(\S+)\s*\n\s*```\w*\s*\n(.*?)```"
+    matches = re.findall(pattern, code, re.DOTALL)
+    if matches:
+        return [(path.strip(), content.strip()) for path, content in matches]
+    match = re.search(r"```(?:python|java|go|ts|js|tsx|jsx)?\s*\n(.*?)```", code, re.DOTALL)
+    if match:
+        return [("code.py", match.group(1).strip())]
+    return [("code.py", code)]
+
+
+def _detect_project_type(files: dict[str, str]) -> str:
+    """根据文件列表检测项目类型"""
+    names = set(files.keys())
+    if "requirements.txt" in names or "setup.py" in names or "pyproject.toml" in names:
+        return "python"
+    if "package.json" in names:
+        return "node"
+    if "pom.xml" in names:
+        return "maven"
+    if "go.mod" in names:
+        return "go"
+    # 按源代码文件推断
+    for name in names:
+        if name.endswith(".py"):
+            return "python"
+        if name.endswith(".js") or name.endswith(".ts"):
+            return "node"
+        if name.endswith(".java"):
+            return "maven"
+        if name.endswith(".go"):
+            return "go"
+    return "unknown"
+
+
+def executor_agent(state: WorkflowState) -> dict:
+    """执行器：实际编译和运行代码，不调用 LLM"""
+    code = state.get("code", "")
+    if not code:
+        return {"execution_result": "fail", "execution_log": "无代码可执行", "phase": "exec_done"}
+
+    # 1. 解析文件并写入临时目录
+    files = _parse_code_files(code)
+    file_dict = {path: content for path, content in files}
+
+    exec_dir = EXEC_DIR.resolve()
+    if exec_dir.exists():
+        shutil.rmtree(exec_dir)
+    exec_dir.mkdir(parents=True, exist_ok=True)
+
+    for file_path, content in files:
+        target = exec_dir / file_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+
+    # 2. 检测项目类型
+    project_type = _detect_project_type(file_dict)
+
+    # 3. 根据类型执行构建和运行
+    log_parts = [f"项目类型: {project_type}", f"文件数: {len(files)}"]
+    timeout = 120
+    passed = False
+
+    try:
+        if project_type == "python":
+            result = _run_python_project(exec_dir, log_parts, timeout)
+            passed = result
+        elif project_type == "node":
+            result = _run_node_project(exec_dir, log_parts, timeout)
+            passed = result
+        elif project_type == "maven":
+            result = _run_maven_project(exec_dir, log_parts, timeout)
+            passed = result
+        elif project_type == "go":
+            result = _run_go_project(exec_dir, log_parts, timeout)
+            passed = result
+        else:
+            log_parts.append("无法检测项目类型，跳过执行")
+            passed = True  # 无法判断时放行，交给 reviewer
+    except subprocess.TimeoutExpired:
+        log_parts.append(f"执行超时（>{timeout}秒）")
+    except Exception as e:
+        log_parts.append(f"执行异常: {e}")
+
+    log = "\n".join(log_parts)
+    return {
+        "execution_result": "pass" if passed else "fail",
+        "execution_log": log,
+        "phase": "exec_done",
+    }
+
+
+def _run_python_project(exec_dir: Path, log: list, timeout: int) -> bool:
+    """运行 Python 项目：安装依赖 + 语法检查 + 尝试运行"""
+    exec_dir = exec_dir.resolve()
+    req_file = exec_dir / "requirements.txt"
+    if req_file.exists():
+        result = subprocess.run(
+            ["pip", "install", "-r", str(req_file)],
+            capture_output=True, text=True, timeout=timeout, cwd=str(exec_dir),
+        )
+        log.append(f"[pip install] {result.returncode}\n{result.stdout[-500:]}{result.stderr[-500:]}")
+        if result.returncode != 0:
+            return False
+
+    # 语法检查所有 .py 文件
+    py_files = list(exec_dir.rglob("*.py"))
+    for pf in py_files:
+        result = subprocess.run(
+            ["python", "-c", f"import py_compile; py_compile.compile({str(pf)!r}, doraise=True)"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            log.append(f"[语法检查失败] {pf.relative_to(exec_dir)}\n{result.stderr[-500:]}")
+            return False
+    log.append(f"[语法检查] {len(py_files)} 个文件全部通过")
+
+    # 尝试运行入口文件
+    entry = _find_entry(exec_dir, ["main.py", "app.py", "run.py", "manage.py", "server.py"])
+    if entry:
+        result = subprocess.run(
+            ["python", str(entry)],
+            capture_output=True, text=True, timeout=min(timeout, 15),
+        )
+        log.append(f"[运行 {entry.name}] exit={result.returncode}\n{result.stdout[-500:]}{result.stderr[-500:]}")
+    return True
+
+
+def _run_node_project(exec_dir: Path, log: list, timeout: int) -> bool:
+    """运行 Node.js 项目：npm install + 语法检查"""
+    exec_dir = exec_dir.resolve()
+    result = subprocess.run(
+        ["npm", "install"], capture_output=True, text=True,
+        timeout=timeout, cwd=str(exec_dir), shell=True,
+    )
+    log.append(f"[npm install] {result.returncode}\n{result.stdout[-500:]}{result.stderr[-500:]}")
+    if result.returncode != 0:
+        return False
+    js_files = list(exec_dir.rglob("*.js"))
+    for jf in js_files[:20]:
+        result = subprocess.run(
+            ["node", "--check", str(jf)],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            log.append(f"[语法检查失败] {jf.relative_to(exec_dir)}\n{result.stderr[-500:]}")
+            return False
+    log.append(f"[语法检查] 通过")
+    return True
+
+
+def _run_maven_project(exec_dir: Path, log: list, timeout: int) -> bool:
+    """运行 Maven 项目：mvn compile"""
+    exec_dir = exec_dir.resolve()
+    result = subprocess.run(
+        ["mvn", "compile", "-q"], capture_output=True, text=True,
+        timeout=timeout, cwd=str(exec_dir),
+    )
+    log.append(f"[mvn compile] {result.returncode}\n{result.stdout[-500:]}{result.stderr[-500:]}")
+    return result.returncode == 0
+
+
+def _run_go_project(exec_dir: Path, log: list, timeout: int) -> bool:
+    """运行 Go 项目：go build"""
+    exec_dir = exec_dir.resolve()
+    result = subprocess.run(
+        ["go", "build", "./..."], capture_output=True, text=True,
+        timeout=timeout, cwd=str(exec_dir),
+    )
+    log.append(f"[go build] {result.returncode}\n{result.stdout[-500:]}{result.stderr[-500:]}")
+    return result.returncode == 0
+
+
+def _find_entry(exec_dir: Path, names: list[str]) -> Path | None:
+    """查找入口文件"""
+    for name in names:
+        candidate = exec_dir / name
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def reviewer_agent(state: WorkflowState) -> dict:

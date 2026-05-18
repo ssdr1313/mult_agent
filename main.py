@@ -55,6 +55,7 @@ PHASE_NAMES = {
     "product": "需求分析",
     "design": "设计文档",
     "code": "代码生成",
+    "exec": "编译运行",
     "review": "代码审查",
     "test": "测试验证",
     "done": "需求关闭",
@@ -73,6 +74,9 @@ def print_phase(phase: str, state: dict):
         print(state["design"])
     elif phase == "code" and state.get("code"):
         print(state["code"])
+    elif phase in ("exec", "exec_done"):
+        print(f"执行结果: {state.get('execution_result', '?')}")
+        print(state.get("execution_log", ""))
     elif phase in ("review", "review_done"):
         print(f"审查结果: {state.get('review_result', '?')}")
         print(state.get("review_comment", ""))
@@ -120,6 +124,8 @@ def main():
             "requirement": "",
             "design": "",
             "code": "",
+            "execution_result": "",
+            "execution_log": "",
             "review_result": "",
             "review_comment": "",
             "test_result": "",

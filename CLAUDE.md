@@ -36,17 +36,17 @@ main.py → graph.py → agents.py → state.py
 ```
 
 - **`state.py`** — `WorkflowState` TypedDict。保存所有产出物（`requirement`、`design`、`code`、`review_result`、`test_result`、`delivery_report`）以及 `retry_count` 和 `max_retries`。
-- **`agents.py`** — 六个 Agent 函数。developer 严格遵循架构师的技术选型（不再硬编码 Python），按 `### FILE: <path>` 格式输出多文件项目；reviewer/tester 检查项目可运行性和完整性。
+- **`agents.py`** — 七个 Agent 函数。developer 按架构师选型生成多文件项目（`### FILE: <path>` 格式）；executor 实际编译运行代码并反馈错误（不调用 LLM）；reviewer/tester 检查可运行性和完整性。
 - **`graph.py`** — `build_graph()` 构建包含六个节点的 `StateGraph`。在 `reviewer` 和 `tester` 节点设有条件边，失败时回到 `developer` 重试（最多 `max_retries` 次，默认 3）。`route_after_review()` 和 `route_after_test()` 在 `retry_count >= max_retries` 时强制继续前进。
 - **`main.py`** — CLI 入口。支持传需求文档（`.txt` / `.md` / `.docx`）。`parse_files()` 解析多文件输出并还原目录结构，`save_outputs()` 保存到 `output/`。
 
 ## 工作流图
 
 ```
-START → product_agent → architect_agent → developer_agent → reviewer_agent
-                ┌──────── pass ──────── tester_agent ──── pass ─── devops_agent → END
-                │                              │
-                └──── fail → developer ────────┘ fail → developer（最多重试 3 次）
+START → product_agent → architect_agent → developer_agent → executor_agent
+         ┌──────── pass ──────── reviewer_agent ─── pass ─── tester_agent ─── pass ─── devops_agent → END
+         │                              │                          │
+         └──── fail → developer ────────┘ fail → developer ───────┘ fail → developer（最多重试 3 次）
 ```
 
 ## 配置
