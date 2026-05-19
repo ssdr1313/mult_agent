@@ -25,6 +25,7 @@ python main.py
 - `requirement.md` — 需求分析文档
 - `design.md` — 技术设计文档
 - `<项目文件>` — 开发者按 `### FILE: <path>` 格式输出的完整项目，`main.py` 自动解析并还原目录结构
+- `Dockerfile` — executor 自动生成（有 Docker 时），用于在任何机器上复现运行环境
 - `delivery_report.md` — 项目交付报告
 
 ## 架构
@@ -36,7 +37,7 @@ main.py → graph.py → agents.py → state.py
 ```
 
 - **`state.py`** — `WorkflowState` TypedDict。保存所有产出物（`requirement`、`design`、`code`、`review_result`、`test_result`、`delivery_report`）以及 `retry_count` 和 `max_retries`。
-- **`agents.py`** — 七个 Agent 函数。developer 按架构师选型生成多文件项目（`### FILE: <path>` 格式）；executor 实际编译运行代码并反馈错误（不调用 LLM）；reviewer/tester 检查可运行性和完整性。
+- **`agents.py`** — 七个 Agent 函数。developer 按架构师选型生成多文件项目（`### FILE: <path>` 格式）；executor 在 Docker 沙箱中编译运行代码（Docker 不可用时回退子进程），并生成 Dockerfile 保证环境一致性；reviewer/tester 检查可运行性和完整性。
 - **`graph.py`** — `build_graph()` 构建包含六个节点的 `StateGraph`。在 `reviewer` 和 `tester` 节点设有条件边，失败时回到 `developer` 重试（最多 `max_retries` 次，默认 3）。`route_after_review()` 和 `route_after_test()` 在 `retry_count >= max_retries` 时强制继续前进。
 - **`main.py`** — CLI 入口。支持传需求文档（`.txt` / `.md` / `.docx`）。`parse_files()` 解析多文件输出并还原目录结构，`save_outputs()` 保存到 `output/`。
 

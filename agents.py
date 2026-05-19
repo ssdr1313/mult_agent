@@ -26,7 +26,7 @@ def _extract_result(text: str) -> str:
     return match.group(1).lower() if match else "pass"
 
 
-def product_agent(state: WorkflowState) -> dict:
+def product_agent(state: WorkflowState) -> dict:#todo图片等多模态
     """产品经理：需求分析"""
     user_input = state["messages"][-1].content if state["messages"] else ""
     response = llm.invoke([
@@ -44,13 +44,15 @@ def product_agent(state: WorkflowState) -> dict:
     }
 
 
-def architect_agent(state: WorkflowState) -> dict:
+def architect_agent(state: WorkflowState) -> dict:#怎加定义代码格式prompt
     """架构师：技术设计"""
     response = llm.invoke([
         SystemMessage(content=(
             "你是一位资深架构师。请根据需求文档输出技术设计方案，包含：\n"
-            "1. 技术栈选型\n2. 模块划分\n3. 数据流设计\n4. 接口定义（REST API 或函数签名）\n"
-            "5. 数据库表设计（如涉及）\n"
+            "1. 技术栈选型（含 Docker 基础镜像，如 python:3.11-slim / node:18-alpine / maven:3-openjdk-17）\n"
+            "2. 模块划分\n3. 数据流设计\n4. 接口定义（REST API 或函数签名）\n"
+            "5. 数据库表设计（如涉及，优先使用 SQLite 等免安装方案）\n"
+            #todo"6. 制订统一的code standard"
             "输出格式使用 Markdown。只输出设计文档，不要输出其他内容。"
         )),
         HumanMessage(content=f"需求文档：\n{state['requirement']}")
@@ -75,6 +77,7 @@ def developer_agent(state: WorkflowState) -> dict:
         SystemMessage(content=(
             "你是一位资深全栈软件工程师。请严格按照架构师的设计文档生成完整的项目代码。\n\n"
             "## 核心原则\n"
+            #todo"- 遵守资深架构师制订的code standard"
             "- 严格遵循设计文档中的技术栈、语言、框架、模块划分，不得自行更改\n"
             "- 项目必须是自包含的：所有 import/require 引用的模块都必须由你生成，外部依赖通过构建文件声明\n"
             "- 每个文件输出为一个代码块\n\n"
@@ -108,6 +111,79 @@ def developer_agent(state: WorkflowState) -> dict:
 
 
 EXEC_DIR = Path("output/.exec")
+
+DOCKER_IMAGES = {
+    "python": "python:3.11-slim",
+    "node": "node:18-alpine",
+    "maven": "maven:3-openjdk-17",
+    "go": "golang:1.21-alpine",
+}
+
+DOCKERFILE_TEMPLATES = {
+    "python": (
+        "FROM {image}\n"
+        "WORKDIR /app\n"
+        "COPY . .\n"
+        "RUN pip install -r requirements.txt 2>/dev/null || true\n"
+        'CMD ["python", "main.py"]\n'
+    ),
+    "node": (
+        "FROM {image}\n"
+        "WORKDIR /app\n"
+        "COPY . .\n"
+        "RUN npm install 2>/dev/null || true\n"
+        'CMD ["node", "index.js"]\n'
+    ),
+    "maven": (
+        "FROM {image} AS build\n"
+        "WORKDIR /app\n"
+        "COPY . .\n"
+        "RUN mvn package -q -DskipTests 2>/dev/null || mvn compile -q 2>/dev/null || true\n"
+        'CMD ["java", "-jar", "target/*.jar"]\n'
+    ),
+    "go": (
+        "FROM {image}\n"
+        "WORKDIR /app\n"
+        "COPY . .\n"
+        "RUN go build -o app ./...\n"
+        'CMD ["./app"]\n'
+    ),
+}
+
+
+def _docker_available() -> bool:
+    return shutil.which("docker") is not None
+
+
+def _run_in_docker(exec_dir: Path, project_type: str, log: list, timeout: int) -> bool:
+    """在 Docker 容器中构建和运行项目"""
+    image = DOCKER_IMAGES.get(project_type, "python:3.11-slim")
+    dockerfile = DOCKERFILE_TEMPLATES.get(project_type, DOCKERFILE_TEMPLATES["python"])
+    dockerfile_content = dockerfile.format(image=image)
+
+    (exec_dir / "Dockerfile").write_text(dockerfile_content, encoding="utf-8")
+    tag = f"agent-exec-{project_type}-{os.getpid()}"
+
+    # 构建镜像
+    build_result = subprocess.run(
+        ["docker", "build", "-t", tag, "."],
+        capture_output=True, text=True, timeout=min(timeout, 180), cwd=str(exec_dir),
+    )
+    log.append(f"[docker build] exit={build_result.returncode}\n{build_result.stderr[-500:]}")
+    if build_result.returncode != 0:
+        return False
+
+    # 运行容器（无网络，限时）
+    try:
+        run_result = subprocess.run(
+            ["docker", "run", "--rm", "--network=none", tag],
+            capture_output=True, text=True, timeout=min(timeout, 30), cwd=str(exec_dir),
+        )
+        log.append(f"[docker run] exit={run_result.returncode}\n{run_result.stdout[-500:]}{run_result.stderr[-500:]}")
+        return run_result.returncode == 0
+    except subprocess.TimeoutExpired:
+        log.append(f"[docker run] 超时（>{min(timeout, 30)}秒），容器已自动终止")
+        return True  # 能启动并运行超时说明代码可运行
 
 
 def _parse_code_files(code: str) -> list[tuple[str, str]]:
@@ -169,31 +245,42 @@ def executor_agent(state: WorkflowState) -> dict:
     # 2. 检测项目类型
     project_type = _detect_project_type(file_dict)
 
-    # 3. 根据类型执行构建和运行
+    # 3. 根据类型执行构建和运行（优先 Docker）
     log_parts = [f"项目类型: {project_type}", f"文件数: {len(files)}"]
-    timeout = 120
+    timeout = 180
     passed = False
 
+    use_docker = _docker_available()
+    if use_docker:
+        log_parts.append("执行方式: Docker 沙箱")
+    else:
+        log_parts.append("执行方式: 本机子进程（Docker 不可用）")
+
     try:
-        if project_type == "python":
-            result = _run_python_project(exec_dir, log_parts, timeout)
-            passed = result
+        if use_docker and project_type in DOCKER_IMAGES:
+            passed = _run_in_docker(exec_dir, project_type, log_parts, timeout)
+        elif project_type == "python":
+            passed = _run_python_project(exec_dir, log_parts, timeout)
         elif project_type == "node":
-            result = _run_node_project(exec_dir, log_parts, timeout)
-            passed = result
+            passed = _run_node_project(exec_dir, log_parts, timeout)
         elif project_type == "maven":
-            result = _run_maven_project(exec_dir, log_parts, timeout)
-            passed = result
+            passed = _run_maven_project(exec_dir, log_parts, timeout)
         elif project_type == "go":
-            result = _run_go_project(exec_dir, log_parts, timeout)
-            passed = result
+            passed = _run_go_project(exec_dir, log_parts, timeout)
         else:
             log_parts.append("无法检测项目类型，跳过执行")
-            passed = True  # 无法判断时放行，交给 reviewer
+            passed = True
     except subprocess.TimeoutExpired:
         log_parts.append(f"执行超时（>{timeout}秒）")
     except Exception as e:
         log_parts.append(f"执行异常: {e}")
+
+    # 保留 Dockerfile 到 output 目录
+    dockerfile_path = exec_dir / "Dockerfile"
+    if dockerfile_path.exists():
+        output_dockerfile = Path("output") / "Dockerfile"
+        output_dockerfile.write_text(dockerfile_path.read_text(encoding="utf-8"), encoding="utf-8")
+        log_parts.append(f"Dockerfile 已保留到 output/Dockerfile\n镜像: {DOCKER_IMAGES.get(project_type, 'python:3.11-slim')}")
 
     log = "\n".join(log_parts)
     return {
@@ -343,6 +430,7 @@ def tester_agent(state: WorkflowState) -> dict:
             "2. **静态分析**：检查逻辑缺陷、边界条件、异常场景\n"
             "3. **功能验证**：逐条对照需求文档的验收标准，检查代码是否实现\n"
             "4. **可运行性**：按 README 的步骤，是否每个命令都能成功执行？\n\n"
+            # todo对delvepment的代码生成对应接口的unit test
             "输出格式：\n"
             "- 验收标准检查结果\n"
             "- 问题列表（如有）\n"

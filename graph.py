@@ -70,7 +70,11 @@ def build_graph() -> StateGraph:
         route_after_test,
         {"devops": "devops", "developer": "developer"},
     )
-
+    #todo tester后加入auto(全拼) bulider agent：
+    #定义一个
+    #编译develpment代码，打成可执行的包，基于包测试tester生成的单元测试代码，输出1 unit test结果报告 2 unit test测试完后占代码覆盖率
+    #agent：end to end test（端到端）
+    #agent：根据前端的设计和代码，模拟高频点击测页面效果，返回产生结果
     # 交付节点后结束
     builder.add_edge("devops", END)
 
