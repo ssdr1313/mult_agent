@@ -44,7 +44,7 @@ def product_agent(state: WorkflowState) -> dict:
     ])
     return {
         "requirement": response.content,
-        "phase": "design",
+        "phase": "product",
     }
 
 
@@ -68,7 +68,7 @@ def architect_agent(state: WorkflowState) -> dict:
     ])
     return {
         "design": response.content,
-        "phase": "code",
+        "phase": "design",
     }
 
 
@@ -126,7 +126,7 @@ def developer_agent(state: WorkflowState) -> dict:
     ])
     return {
         "code": response.content,
-        "phase": "validate",
+        "phase": "code",
         "retry_count": state.get("retry_count", 0) + 1,
     }
 
@@ -142,7 +142,7 @@ def validator_agent(state: WorkflowState) -> dict:
     """语法验证器：对代码做编译/语法检查，不实际运行程序"""
     code = state.get("code", "")
     if not code:
-        return {"validation_result": "fail", "validation_log": "无代码可验证", "phase": "validate_done"}
+        return {"validation_result": "fail", "validation_log": "无代码可验证", "phase": "validate"}
 
     files = _parse_code_files(code)
     file_dict = {path: content for path, content in files}
@@ -183,7 +183,7 @@ def validator_agent(state: WorkflowState) -> dict:
     return {
         "validation_result": "pass" if passed else "fail",
         "validation_log": log,
-        "phase": "review" if passed else "validate_done",
+        "phase": "validate",
     }
 
 
@@ -277,7 +277,7 @@ def reviewer_agent(state: WorkflowState) -> dict:
     return {
         "review_result": result,
         "review_comment": response.content,
-        "phase": "test" if result == "pass" else "review_done",
+        "phase": "review",
     }
 
 
@@ -369,7 +369,7 @@ def tester_agent(state: WorkflowState) -> dict:
     result = _extract_result(response.content)
     return {
         "unit_test_code": response.content,
-        "phase": "build",
+        "phase": "test",
     }
 
 
@@ -407,7 +407,7 @@ def auto_builder_agent(state: WorkflowState) -> dict:
                 "build_result": "pass" if results.get("passed") else "fail",
                 "build_log": "\n".join(log_parts) + "\n" + results.get("log", ""),
                 "coverage_report": results.get("coverage", "无覆盖率数据"),
-                "phase": "frontend",
+                "phase": "build",
             }
         except (json.JSONDecodeError, KeyError) as e:
             log_parts.append(f"外部结果文件解析失败: {e}，回退到本地运行")
@@ -444,7 +444,7 @@ def auto_builder_agent(state: WorkflowState) -> dict:
         "build_result": "pass" if passed else "fail",
         "build_log": "\n".join(log_parts),
         "coverage_report": cov_report or "本地回退模式未生成覆盖率报告（安装 coverage/pytest-cov 等工具可获取覆盖率）",
-        "phase": "frontend",
+        "phase": "build",
     }
 
 
@@ -551,7 +551,7 @@ def frontend_agent(state: WorkflowState) -> dict:
     return {
         "frontend_test_result": result,
         "frontend_test_report": response.content,
-        "phase": "devops",
+        "phase": "frontend",
     }
 
 

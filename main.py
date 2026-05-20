@@ -77,11 +77,23 @@ STOP_ORDER = ["product", "design", "code", "validate", "review", "test", "build"
 # 用于 --stop-at 判断：每个 phase 值对应的流程位置（越大越靠后）
 _PHASE_POS = {
     "product": 0, "design": 1, "code": 2,
-    "validate": 3, "validate_done": 3,   # done=fail，不触发停止
-    "review": 4, "review_done": 4,       # done=fail，不触发停止
-    "test": 5, "test_done": 5,           # done=fail，不触发停止
+    "validate": 3, "review": 4, "test": 5,
     "build": 6, "frontend": 7, "devops": 8, "done": 9,
 }
+
+# 各阶段对应的 pass/fail 结果字段
+_PHASE_RESULT_KEY = {
+    "validate": "validation_result",
+    "review": "review_result",
+    "build": "build_result",
+    "frontend": "frontend_test_result",
+}
+
+
+def _phase_passed(phase: str, state: dict) -> bool:
+    """该阶段是否通过（无结果字段的阶段如 product/design/code 默认通过）"""
+    key = _PHASE_RESULT_KEY.get(phase)
+    return state.get(key) != "fail" if key else True
 
 
 def print_phase(phase: str, state: dict):
@@ -96,23 +108,23 @@ def print_phase(phase: str, state: dict):
         print(state["design"])
     elif phase == "code" and state.get("code"):
         print(state["code"])
-    elif phase in ("validate", "validate_done"):
+    elif phase == "validate":
         print(f"编译验证结果: {state.get('validation_result', '?')}")
         print(state.get("validation_log", ""))
-    elif phase in ("review", "review_done"):
+    elif phase == "review":
         print(f"审查结果: {state.get('review_result', '?')}")
         print(state.get("review_comment", ""))
-    elif phase in ("test", "test_done"):
+    elif phase == "test":
         unit_code = state.get("unit_test_code", "")
         if unit_code:
             files = parse_files(unit_code)
             print(f"已生成 {len(files)} 个单元测试文件")
-    elif phase in ("build",):
+    elif phase == "build":
         print(f"构建结果: {state.get('build_result', '?')}")
         print(state.get("build_log", ""))
         if state.get("coverage_report"):
             print(f"\n覆盖率:\n{state['coverage_report']}")
-    elif phase in ("frontend",):
+    elif phase == "frontend":
         print(f"前端测试结果: {state.get('frontend_test_result', '?')}")
         print(state.get("frontend_test_report", ""))
     elif phase == "done":
@@ -184,8 +196,8 @@ def main():
             if phase and phase != prev_phase:
                 print_phase(phase, full_state)
                 prev_phase = phase
-            # 检查是否到达停止点
-            if _PHASE_POS.get(phase, 99) > stop_pos:
+            # 检查是否到达停止点（阶段通过才停）
+            if _PHASE_POS.get(phase, -1) >= stop_pos and _phase_passed(phase, full_state):
                 break
         else:
             continue
@@ -193,7 +205,7 @@ def main():
 
     save_outputs(full_state)
 
-    if prev_phase and _PHASE_POS.get(prev_phase, 0) > stop_pos:
+    if prev_phase and _PHASE_POS.get(prev_phase, -1) >= stop_pos:
         print("\n" + "=" * 60)
         print(f"  已停止于 {PHASE_NAMES.get(args.stop_at, args.stop_at)} 阶段")
         print(f"  产出文件在 {OUTPUT_DIR.resolve()}/")
