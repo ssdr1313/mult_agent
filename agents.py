@@ -79,6 +79,8 @@ def architect_agent(state: WorkflowState) -> dict:
 def developer_agent(state: WorkflowState) -> dict:
     """开发者：代码生成"""
     feedback = ""
+    if state.get("validation_result") == "fail":
+        feedback += f"\n\n⚠️ 编译/语法检查失败，请根据以下错误修复：\n{state['validation_log']}"
     if state.get("review_result") == "fail":
         feedback += f"\n\n⚠️ 代码审查不通过，请根据以下意见修复：\n{state['review_comment']}"
     if state.get("build_result") == "fail":
@@ -116,13 +118,121 @@ def developer_agent(state: WorkflowState) -> dict:
     ])
     return {
         "code": response.content,
-        "phase": "review",
+        "phase": "validate",
         "retry_count": state.get("retry_count", 0) + 1,
     }
 
 
 # ═══════════════════════════════════════════════════════════════
-# Phase 4: 代码审查
+# Phase 4: 编译/语法验证（轻量，不运行程序）
+# ═══════════════════════════════════════════════════════════════
+
+VALIDATE_DIR = Path("output/.validate")
+
+
+def validator_agent(state: WorkflowState) -> dict:
+    """语法验证器：对代码做编译/语法检查，不实际运行程序"""
+    code = state.get("code", "")
+    if not code:
+        return {"validation_result": "fail", "validation_log": "无代码可验证", "phase": "validate_done"}
+
+    files = _parse_code_files(code)
+    file_dict = {path: content for path, content in files}
+
+    validate_dir = VALIDATE_DIR.resolve()
+    if validate_dir.exists():
+        shutil.rmtree(validate_dir)
+    validate_dir.mkdir(parents=True, exist_ok=True)
+
+    for file_path, content in files:
+        target = validate_dir / file_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+
+    project_type = _detect_project_type(file_dict)
+    log_parts = [f"项目类型: {project_type}", f"文件数: {len(files)}"]
+    timeout = 120
+    passed = False
+
+    try:
+        if project_type == "python":
+            passed = _validate_python(validate_dir, log_parts, timeout)
+        elif project_type == "node":
+            passed = _validate_node(validate_dir, log_parts, timeout)
+        elif project_type == "maven":
+            passed = _validate_maven(validate_dir, log_parts, timeout)
+        elif project_type == "go":
+            passed = _validate_go(validate_dir, log_parts, timeout)
+        else:
+            log_parts.append("无法检测项目类型，跳过编译验证")
+            passed = True
+    except subprocess.TimeoutExpired:
+        log_parts.append(f"验证超时（>{timeout}秒）")
+    except Exception as e:
+        log_parts.append(f"验证异常: {e}")
+
+    log = "\n".join(log_parts)
+    return {
+        "validation_result": "pass" if passed else "fail",
+        "validation_log": log,
+        "phase": "review" if passed else "validate_done",
+    }
+
+
+def _validate_python(validate_dir: Path, log: list, timeout: int) -> bool:
+    """Python 编译检查"""
+    py_files = list(validate_dir.rglob("*.py"))
+    for pf in py_files:
+        result = subprocess.run(
+            ["python", "-m", "py_compile", str(pf)],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            log.append(f"[编译失败] {pf.relative_to(validate_dir)}\n{result.stderr[-500:]}")
+            return False
+    log.append(f"[py_compile] {len(py_files)} 个文件全部通过")
+    return True
+
+
+def _validate_node(validate_dir: Path, log: list, timeout: int) -> bool:
+    """Node.js 语法检查"""
+    node = shutil.which("node") or "node"
+    js_files = list(validate_dir.rglob("*.js")) + list(validate_dir.rglob("*.ts"))
+    for jf in js_files[:50]:
+        result = subprocess.run(
+            [node, "--check", str(jf)],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            log.append(f"[语法失败] {jf.relative_to(validate_dir)}\n{result.stderr[-500:]}")
+            return False
+    log.append(f"[node --check] {len(js_files)} 个文件全部通过")
+    return True
+
+
+def _validate_maven(validate_dir: Path, log: list, timeout: int) -> bool:
+    """Maven 编译检查"""
+    mvn = shutil.which("mvn") or "mvn"
+    result = subprocess.run(
+        [mvn, "compile", "-q"], capture_output=True, text=True,
+        timeout=timeout, cwd=str(validate_dir),
+    )
+    log.append(f"[mvn compile] exit={result.returncode}\n{result.stderr[-500:]}")
+    return result.returncode == 0
+
+
+def _validate_go(validate_dir: Path, log: list, timeout: int) -> bool:
+    """Go 编译检查"""
+    result = subprocess.run(
+        ["go", "build", "./..."], capture_output=True, text=True,
+        timeout=timeout, cwd=str(validate_dir),
+    )
+    log.append(f"[go build] exit={result.returncode}\n{result.stderr[-500:]}")
+    return result.returncode == 0
+
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 5: 代码审查
 # ═══════════════════════════════════════════════════════════════
 
 def reviewer_agent(state: WorkflowState) -> dict:
@@ -219,7 +329,7 @@ def _save_files_to_dir(code: str, target_dir: Path):
 
 
 # ═══════════════════════════════════════════════════════════════
-# Phase 5: 测试生成
+# Phase 6: 测试生成
 # ═══════════════════════════════════════════════════════════════
 
 def tester_agent(state: WorkflowState) -> dict:
@@ -256,7 +366,7 @@ def tester_agent(state: WorkflowState) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════
-# Phase 6: 自动构建与测试（外部系统 + 本地回退）
+# Phase 7: 自动构建与测试（外部系统 + 本地回退）
 # ═══════════════════════════════════════════════════════════════
 
 def auto_builder_agent(state: WorkflowState) -> dict:
@@ -402,7 +512,7 @@ def _run_go_tests(project_dir: Path, timeout: int) -> tuple[bool, str]:
 
 
 # ═══════════════════════════════════════════════════════════════
-# Phase 7: 前端高频点击测试
+# Phase 8: 前端高频点击测试
 # ═══════════════════════════════════════════════════════════════
 
 def frontend_agent(state: WorkflowState) -> dict:
@@ -438,7 +548,7 @@ def frontend_agent(state: WorkflowState) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════
-# Phase 8: 交付
+# Phase 9: 交付
 # ═══════════════════════════════════════════════════════════════
 
 def devops_agent(state: WorkflowState) -> dict:

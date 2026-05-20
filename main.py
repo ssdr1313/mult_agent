@@ -63,6 +63,7 @@ PHASE_NAMES = {
     "product": "需求分析",
     "design": "设计文档",
     "code": "代码生成",
+    "validate": "编译验证",
     "review": "代码审查",
     "test": "单元测试生成",
     "build": "构建与测试",
@@ -71,14 +72,15 @@ PHASE_NAMES = {
     "done": "完成",
 }
 
-STOP_ORDER = ["product", "design", "code", "review", "test", "build", "frontend", "done"]
+STOP_ORDER = ["product", "design", "code", "validate", "review", "test", "build", "frontend", "done"]
 
 # 用于 --stop-at 判断：每个 phase 值对应的流程位置（越大越靠后）
 _PHASE_POS = {
     "product": 0, "design": 1, "code": 2,
-    "review": 3, "review_done": 3.5,
-    "test": 4, "test_done": 4.5,
-    "build": 5, "frontend": 6, "devops": 7, "done": 8,
+    "validate": 3, "validate_done": 3.5,
+    "review": 4, "review_done": 4.5,
+    "test": 5, "test_done": 5.5,
+    "build": 6, "frontend": 7, "devops": 8, "done": 9,
 }
 
 
@@ -94,6 +96,9 @@ def print_phase(phase: str, state: dict):
         print(state["design"])
     elif phase == "code" and state.get("code"):
         print(state["code"])
+    elif phase in ("validate", "validate_done"):
+        print(f"编译验证结果: {state.get('validation_result', '?')}")
+        print(state.get("validation_log", ""))
     elif phase in ("review", "review_done"):
         print(f"审查结果: {state.get('review_result', '?')}")
         print(state.get("review_comment", ""))
@@ -128,7 +133,7 @@ def main():
 
     print("=" * 60)
     print("  多 Agent 协作工作流")
-    print("  需求分析 → 设计 → 代码生成 → 审查 → 测试生成 → 构建测试 → 前端测试 → 交付")
+    print("  需求分析 → 设计 → 代码生成 → 编译验证 → 审查 → 测试生成 → 构建测试 → 前端测试 → 交付")
     print("=" * 60)
     print()
 
@@ -157,6 +162,8 @@ def main():
             "requirement": "",
             "design": "",
             "code": "",
+            "validation_result": "",
+            "validation_log": "",
             "review_result": "",
             "review_comment": "",
             "unit_test_code": "",
