@@ -67,7 +67,18 @@ PHASE_NAMES = {
     "test": "单元测试生成",
     "build": "构建与测试",
     "frontend": "前端高频点击测试",
-    "done": "需求关闭与交付",
+    "devops": "需求关闭与交付",
+    "done": "完成",
+}
+
+STOP_ORDER = ["product", "design", "code", "review", "test", "build", "frontend", "done"]
+
+# 用于 --stop-at 判断：每个 phase 值对应的流程位置（越大越靠后）
+_PHASE_POS = {
+    "product": 0, "design": 1, "code": 2,
+    "review": 3, "review_done": 3.5,
+    "test": 4, "test_done": 4.5,
+    "build": 5, "frontend": 6, "devops": 7, "done": 8,
 }
 
 
@@ -109,6 +120,10 @@ def main():
         "file", nargs="?", type=Path,
         help="需求文档路径（不传则交互式输入）",
     )
+    parser.add_argument(
+        "--stop-at", type=str, choices=STOP_ORDER, default="done",
+        help="指定停止阶段（默认 done 即跑完全程），如 --stop-at review 则在审查通过后保存代码退出",
+    )
     args = parser.parse_args()
 
     print("=" * 60)
@@ -130,6 +145,8 @@ def main():
 
     graph = build_graph()
     print(f"\n开始处理需求: {user_input[:80]}{'...' if len(user_input) > 80 else ''}\n")
+
+    stop_pos = _PHASE_POS.get(args.stop_at, 99)
 
     prev_phase = None
     full_state = {}
@@ -160,12 +177,23 @@ def main():
             if phase and phase != prev_phase:
                 print_phase(phase, state_update)
                 prev_phase = phase
+            # 检查是否到达停止点
+            if _PHASE_POS.get(phase, 99) > stop_pos:
+                break
+        else:
+            continue
+        break
 
     save_outputs(full_state)
 
-    print("\n" + "=" * 60)
-    print("  工作流执行完毕")
-    print("=" * 60)
+    if prev_phase and _PHASE_POS.get(prev_phase, 0) > stop_pos:
+        print("\n" + "=" * 60)
+        print(f"  已停止于 {PHASE_NAMES.get(args.stop_at, args.stop_at)} 阶段")
+        print(f"  产出文件在 {OUTPUT_DIR.resolve()}/")
+    else:
+        print("\n" + "=" * 60)
+        print("  工作流执行完毕")
+        print("=" * 60)
 
 
 if __name__ == "__main__":
