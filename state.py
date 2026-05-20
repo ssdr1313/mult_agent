@@ -10,12 +10,14 @@ class WorkflowState(TypedDict):
     requirement: str
     design: str
     code: str
-    execution_result: str   # "pass" | "fail" — 实际编译运行结果
-    execution_log: str      # 编译运行的 stdout+stderr
     review_result: str      # "pass" | "fail"
     review_comment: str
-    test_result: str        # "pass" | "fail"
-    test_report: str
+    unit_test_code: str     # tester 生成的单元测试代码
+    build_result: str       # "pass" | "fail" — auto_builder 构建+测试结果
+    build_log: str          # auto_builder 的 stdout+stderr
+    coverage_report: str    # 测试覆盖率报告
+    frontend_test_result: str    # "pass" | "fail" — 前端高频点击测试
+    frontend_test_report: str    # 前端测试报告
     delivery_report: str
     # 重试计数
     retry_count: int

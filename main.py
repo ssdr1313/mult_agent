@@ -19,12 +19,10 @@ def read_document(path: Path) -> str:
 
 def parse_files(text: str) -> list[tuple[str, str]]:
     """从多文件输出中解析文件列表，返回 [(路径, 内容), ...]"""
-    # 匹配 ### FILE: <path> 后紧跟代码块
     pattern = r"###\s*FILE:\s*(\S+)\s*\n\s*```\w*\s*\n(.*?)```"
     matches = re.findall(pattern, text, re.DOTALL)
     if matches:
         return [(path.strip(), content.strip()) for path, content in matches]
-    # 兼容旧格式：单文件输出
     match = re.search(r"```(?:python|java|go|ts|js|tsx|jsx)?\s*\n(.*?)```", text, re.DOTALL)
     if match:
         return [("code.py", match.group(1).strip())]
@@ -46,21 +44,30 @@ def save_outputs(state: dict):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
         print(f"  生成 {len(files)} 个文件")
-    if state.get("test_report"):
-        (OUTPUT_DIR / "test_report.md").write_text(state["test_report"], encoding="utf-8")
+    if state.get("unit_test_code"):
+        # 测试代码保存到 output/tests/ 子目录
+        test_dir = OUTPUT_DIR / "tests"
+        test_files = parse_files(state["unit_test_code"])
+        for file_path, content in test_files:
+            target = test_dir / file_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+        print(f"  生成 {len(test_files)} 个测试文件")
     if state.get("delivery_report"):
         (OUTPUT_DIR / "delivery_report.md").write_text(state["delivery_report"], encoding="utf-8")
 
     print(f"\n产出已保存到 {OUTPUT_DIR.resolve()}/")
 
+
 PHASE_NAMES = {
     "product": "需求分析",
     "design": "设计文档",
     "code": "代码生成",
-    "exec": "编译运行",
     "review": "代码审查",
-    "test": "测试验证",
-    "done": "需求关闭",
+    "test": "单元测试生成",
+    "build": "构建与测试",
+    "frontend": "前端高频点击测试",
+    "done": "需求关闭与交付",
 }
 
 
@@ -76,15 +83,22 @@ def print_phase(phase: str, state: dict):
         print(state["design"])
     elif phase == "code" and state.get("code"):
         print(state["code"])
-    elif phase in ("exec", "exec_done"):
-        print(f"执行结果: {state.get('execution_result', '?')}")
-        print(state.get("execution_log", ""))
     elif phase in ("review", "review_done"):
         print(f"审查结果: {state.get('review_result', '?')}")
         print(state.get("review_comment", ""))
     elif phase in ("test", "test_done"):
-        print(f"测试结果: {state.get('test_result', '?')}")
-        print(state.get("test_report", ""))
+        unit_code = state.get("unit_test_code", "")
+        if unit_code:
+            files = parse_files(unit_code)
+            print(f"已生成 {len(files)} 个单元测试文件")
+    elif phase in ("build",):
+        print(f"构建结果: {state.get('build_result', '?')}")
+        print(state.get("build_log", ""))
+        if state.get("coverage_report"):
+            print(f"\n覆盖率:\n{state['coverage_report']}")
+    elif phase in ("frontend",):
+        print(f"前端测试结果: {state.get('frontend_test_result', '?')}")
+        print(state.get("frontend_test_report", ""))
     elif phase == "done":
         print(state.get("delivery_report", ""))
 
@@ -99,7 +113,7 @@ def main():
 
     print("=" * 60)
     print("  多 Agent 协作工作流")
-    print("  需求分析 → 设计 → 代码生成 → 审查 → 测试 → 交付")
+    print("  需求分析 → 设计 → 代码生成 → 审查 → 测试生成 → 构建测试 → 前端测试 → 交付")
     print("=" * 60)
     print()
 
@@ -126,12 +140,14 @@ def main():
             "requirement": "",
             "design": "",
             "code": "",
-            "execution_result": "",
-            "execution_log": "",
             "review_result": "",
             "review_comment": "",
-            "test_result": "",
-            "test_report": "",
+            "unit_test_code": "",
+            "build_result": "",
+            "build_log": "",
+            "coverage_report": "",
+            "frontend_test_result": "",
+            "frontend_test_report": "",
             "delivery_report": "",
             "retry_count": 0,
             "max_retries": 3,
