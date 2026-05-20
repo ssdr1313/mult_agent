@@ -46,6 +46,8 @@ def save_outputs(state: dict):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
         print(f"  生成 {len(files)} 个文件")
+    if state.get("test_report"):
+        (OUTPUT_DIR / "test_report.md").write_text(state["test_report"], encoding="utf-8")
     if state.get("delivery_report"):
         (OUTPUT_DIR / "delivery_report.md").write_text(state["delivery_report"], encoding="utf-8")
 

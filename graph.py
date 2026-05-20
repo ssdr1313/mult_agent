@@ -64,16 +64,12 @@ def build_graph() -> StateGraph:
         {"tester": "tester", "developer": "developer"},
     )
 
-    # 测试条件路由：pass -> devops, fail -> developer
+    # 测试条件路由：外部测试 pass → devops, fail → developer
     builder.add_conditional_edges(
         "tester",
         route_after_test,
         {"devops": "devops", "developer": "developer"},
     )
-    #todo tester后加入auto(全拼) bulider agent：
-    #编译develpment代码，打成可执行的包，基于包测试tester生成的单元测试代码，输出1 unit test结果报告 2 unit test测试完后占代码覆盖率
-    #agent：end to end test（端到端）
-    #agent：模拟高频点击测页面效果，返回产生结果
 
     # 交付节点后结束
     builder.add_edge("devops", END)

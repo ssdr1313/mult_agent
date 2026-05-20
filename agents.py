@@ -356,39 +356,62 @@ def reviewer_agent(state: WorkflowState) -> dict:
 
 
 def tester_agent(state: WorkflowState) -> dict:
-    """测试工程师：测试验证"""
-    retry = state.get("retry_count", 0)
-    max_retries = state.get("max_retries", 3)
+    """测试接口：传出代码给外部测试系统，接收测试结果
 
-    response = llm.invoke([
-        SystemMessage(content=(
-            "你是一位资深测试工程师。请对代码进行测试验证：\n"
-            "1. **完整性检查**（高优先级）：所有文件是否齐全？模块间引用是否正确？构建文件是否能拉取依赖？\n"
-            "2. **静态分析**：检查逻辑缺陷、边界条件、异常场景\n"
-            "3. **功能验证**：逐条对照需求文档的验收标准，检查代码是否实现\n"
-            "4. **可运行性**：按 README 的步骤，是否每个命令都能成功执行？\n\n"
-            # todo对delvepment的代码生成对应接口的unit test
-            "输出格式：\n"
-            "- 验收标准检查结果\n"
-            "- 问题列表（如有）\n"
-            "- 最后一行必须包含结果标记：[RESULT: pass] 或 [RESULT: fail]\n"
-            "- 如果重试次数已达到最大限制，即使有问题也标记 [RESULT: pass]\n"
-            f"当前重试次数：{retry}/{max_retries}"
-        )),
-        HumanMessage(content=(
-            f"需求文档：\n{state['requirement']}\n\n"
-            f"代码：\n{state['code']}\n\n"
-            f"审查结果：{state['review_result']}\n审查意见：{state['review_comment']}"
-        ))
-    ])
+    输入（从 state 读取）：
+        - requirement: 需求文档
+        - design: 设计文档
+        - code: 项目代码（### FILE: 格式）
+        - review_result / review_comment: 审查结果
 
-    result = _extract_result(response.content)
-    if retry >= max_retries:
-        result = "pass"
+    传给外部测试方：
+        - 所有输入已保存到 output/ 目录
+        - 项目文件位于 output/ 下，可直接运行测试
+
+    从外部接收（二选一）：
+        1. 文件方式：外部测试方将结果写入 output/test_result.json
+           格式：{"test_result": "pass"|"fail", "test_report": "...测试报告..."}
+        2. 交互方式：如文件不存在，等待用户在终端输入
+    """
+    from pathlib import Path
+
+    output_dir = Path("output")
+    output_dir.mkdir(exist_ok=True)
+
+    print("\n" + "=" * 60)
+    print("  [tester_agent] 等待外部测试结果...")
+    print("=" * 60)
+    print(f"  项目文件已保存到: {output_dir.resolve()}")
+    print(f"  请外部测试方将结果写入: {output_dir.resolve() / 'test_result.json'}")
+    print(f"  格式: {{\"test_result\": \"pass\"|\"fail\", \"test_report\": \"...\"}}")
+    print()
+
+    result_file = output_dir / "test_result.json"
+
+    if result_file.exists():
+        import json
+        try:
+            data = json.loads(result_file.read_text(encoding="utf-8"))
+            test_result = data.get("test_result", "pass")
+            test_report = data.get("test_report", "")
+            print(f"  ✓ 已读取外部测试结果: {test_result}")
+            return {
+                "test_result": test_result,
+                "test_report": test_report,
+                "phase": "test_done",
+            }
+        except Exception as e:
+            print(f"  ⚠ 读取 test_result.json 失败: {e}，回退到交互输入")
+
+    test_report = input("  请输入测试报告（直接回车则标记 pass）: ").strip()
+    if test_report:
+        test_result = input("  测试结果 (pass/fail，默认 pass): ").strip() or "pass"
+    else:
+        test_result = "pass"
 
     return {
-        "test_result": result,
-        "test_report": response.content,
+        "test_result": test_result,
+        "test_report": test_report,
         "phase": "test_done",
     }
 
