@@ -90,7 +90,15 @@ def developer_agent(state: WorkflowState) -> dict:
     if state.get("validation_result") == "fail":
         feedback += f"\n\n⚠️ 编译/语法检查失败，请根据以下错误修复：\n{state['validation_log']}"
     if state.get("review_result") == "fail":
-        feedback += f"\n\n⚠️ 代码审查不通过，请根据以下意见修复：\n{state['review_comment']}"
+        review = state["review_comment"]
+        feedback += (
+            f"\n\n⚠️ 代码审查不通过。请逐条处理以下问题（不可遗漏）：\n{review}\n\n"
+            "修复策略：\n"
+            "1. 按严重程度从高到低依次修复，高优先级问题必须全部解决\n"
+            "2. 每修复一条问题，确保不引入新问题\n"
+            "3. 凡是指出「未实现」的功能，必须写出完整可运行的代码，禁止保留模拟/占位\n"
+            "4. 修复后重新输出完整项目代码（所有文件），不可只输出修改的文件"
+        )
     if state.get("build_result") == "fail":
         feedback += f"\n\n⚠️ 构建/测试失败，请根据以下日志修复：\n{state['build_log']}"
 
@@ -256,8 +264,15 @@ def reviewer_agent(state: WorkflowState) -> dict:
             "3. **代码质量**：可读性、命名规范、代码风格\n"
             "4. **安全性**：SQL 注入、XSS、认证缺陷、敏感信息硬编码\n"
             "5. **错误处理**：异常捕获、边界条件、输入校验\n\n"
-            "输出格式：\n"
-            "- 先列出发现的问题（如有），每条标注严重程度（高/中/低）\n"
+            "## 审查策略（重试时）\n"
+            "如果这是重试（retry>0），说明上一轮 review_comment 中的问题已被修复。你必须：\n"
+            "- 逐一核对上一轮列出的每一条问题，确认是否已修复\n"
+            "- 已修复的问题标注「✅ 已修复」并简述修复方式，不再列入本次问题清单\n"
+            "- 未修复或修复不完整的问题标注「❌ 仍未修复」并保留在问题清单中\n"
+            "- 只对新出现的问题正常标注严重程度\n\n"
+            "## 输出格式\n"
+            "- 先列出发现的问题（如有），每条标注严重程度（高/中/低）+ 简短一句话描述\n"
+            "- 如果上一轮有问题已修复，先列「已修复」简要清单\n"
             "- 如果没有问题，写「代码审查通过」\n"
             "- 最后一行必须包含结果标记：[RESULT: pass] 或 [RESULT: fail]\n"
             "- 如果重试次数已达到最大限制，即使有问题也标记 [RESULT: pass]\n"
@@ -267,6 +282,9 @@ def reviewer_agent(state: WorkflowState) -> dict:
             f"需求文档：\n{state['requirement']}\n\n"
             f"设计文档：\n{state['design']}\n\n"
             f"代码：\n{state['code']}"
+        ) + (
+            f"\n\n上一轮审查意见（请核对是否已修复）：\n{state['review_comment']}"
+            if state.get("review_result") == "fail" else ""
         ))
     ])
 
