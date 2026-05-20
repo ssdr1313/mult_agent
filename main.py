@@ -77,9 +77,9 @@ STOP_ORDER = ["product", "design", "code", "validate", "review", "test", "build"
 # 用于 --stop-at 判断：每个 phase 值对应的流程位置（越大越靠后）
 _PHASE_POS = {
     "product": 0, "design": 1, "code": 2,
-    "validate": 3, "validate_done": 3.5,
-    "review": 4, "review_done": 4.5,
-    "test": 5, "test_done": 5.5,
+    "validate": 3, "validate_done": 3,   # done=fail，不触发停止
+    "review": 4, "review_done": 4,       # done=fail，不触发停止
+    "test": 5, "test_done": 5,           # done=fail，不触发停止
     "build": 6, "frontend": 7, "devops": 8, "done": 9,
 }
 
@@ -174,7 +174,7 @@ def main():
             "frontend_test_report": "",
             "delivery_report": "",
             "retry_count": 0,
-            "max_retries": 3,
+            "max_retries": 5,
         },
         stream_mode="updates",
     ):
