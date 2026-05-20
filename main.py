@@ -182,7 +182,7 @@ def main():
             full_state.update(state_update)
             phase = state_update.get("phase", "")
             if phase and phase != prev_phase:
-                print_phase(phase, state_update)
+                print_phase(phase, full_state)
                 prev_phase = phase
             # 检查是否到达停止点
             if _PHASE_POS.get(phase, 99) > stop_pos:
