@@ -78,6 +78,14 @@ def architect_agent(state: WorkflowState) -> dict:
 
 def developer_agent(state: WorkflowState) -> dict:
     """开发者：代码生成"""
+    retry = state.get("retry_count", 0)
+    max_r = state.get("max_retries", 10)
+    print(f"\n>>> 第 {retry + 1}/{max_r} 次代码生成", end="")
+    if retry > 0:
+        print(f"（重试 {retry}）")
+    else:
+        print()
+
     feedback = ""
     if state.get("validation_result") == "fail":
         feedback += f"\n\n⚠️ 编译/语法检查失败，请根据以下错误修复：\n{state['validation_log']}"
