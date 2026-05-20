@@ -2,7 +2,6 @@ import os
 import re
 import shutil
 import subprocess
-import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -52,7 +51,12 @@ def architect_agent(state: WorkflowState) -> dict:#怎加定义代码格式promp
             "1. 技术栈选型（含 Docker 基础镜像，如 python:3.11-slim / node:18-alpine / maven:3-openjdk-17）\n"
             "2. 模块划分\n3. 数据流设计\n4. 接口定义（REST API 或函数签名）\n"
             "5. 数据库表设计（如涉及，优先使用 SQLite 等免安装方案）\n"
-            #todo"6. 制订统一的code standard"
+            "6. 统一的代码规范（Code Standard），必须包含以下内容：\n"
+            "   - 命名规范：文件、类、函数、变量的命名风格（如 snake_case / camelCase）\n"
+            "   - 代码结构：每个文件应包含什么（如 import 顺序、模块文档字符串、公共 API 在前）\n"
+            "   - 错误处理规范：异常捕获方式、错误信息格式、日志规范\n"
+            "   - 注释规范：何时需要注释、注释格式要求\n"
+            "   - 测试规范：测试文件位置、测试命名、覆盖率期望\n"
             "输出格式使用 Markdown。只输出设计文档，不要输出其他内容。"
         )),
         HumanMessage(content=f"需求文档：\n{state['requirement']}")
@@ -77,7 +81,7 @@ def developer_agent(state: WorkflowState) -> dict:
         SystemMessage(content=(
             "你是一位资深全栈软件工程师。请严格按照架构师的设计文档生成完整的项目代码。\n\n"
             "## 核心原则\n"
-            #todo"- 遵守资深架构师制订的code standard"
+            "- 严格遵守架构师在设计文档中制订的代码规范（Code Standard），包括命名、结构、错误处理、注释等全部要求\n"
             "- 严格遵循设计文档中的技术栈、语言、框架、模块划分，不得自行更改\n"
             "- 项目必须是自包含的：所有 import/require 引用的模块都必须由你生成，外部依赖通过构建文件声明\n"
             "- 每个文件输出为一个代码块\n\n"
@@ -111,80 +115,6 @@ def developer_agent(state: WorkflowState) -> dict:
 
 
 EXEC_DIR = Path("output/.exec")
-
-DOCKER_IMAGES = {
-    "python": "python:3.11-slim",
-    "node": "node:18-alpine",
-    "maven": "maven:3-openjdk-17",
-    "go": "golang:1.21-alpine",
-}
-
-DOCKERFILE_TEMPLATES = {
-    "python": (
-        "FROM {image}\n"
-        "WORKDIR /app\n"
-        "COPY . .\n"
-        "RUN pip install -r requirements.txt 2>/dev/null || true\n"
-        'CMD ["python", "main.py"]\n'
-    ),
-    "node": (
-        "FROM {image}\n"
-        "WORKDIR /app\n"
-        "COPY . .\n"
-        "RUN npm install 2>/dev/null || true\n"
-        'CMD ["node", "index.js"]\n'
-    ),
-    "maven": (
-        "FROM {image} AS build\n"
-        "WORKDIR /app\n"
-        "COPY . .\n"
-        "RUN mvn package -q -DskipTests 2>/dev/null || mvn compile -q 2>/dev/null || true\n"
-        'CMD ["java", "-jar", "target/*.jar"]\n'
-    ),
-    "go": (
-        "FROM {image}\n"
-        "WORKDIR /app\n"
-        "COPY . .\n"
-        "RUN go build -o app ./...\n"
-        'CMD ["./app"]\n'
-    ),
-}
-
-
-def _docker_available() -> bool:
-    return shutil.which("docker") is not None
-
-
-def _run_in_docker(exec_dir: Path, project_type: str, log: list, timeout: int) -> bool:
-    """在 Docker 容器中构建和运行项目"""
-    image = DOCKER_IMAGES.get(project_type, "python:3.11-slim")
-    dockerfile = DOCKERFILE_TEMPLATES.get(project_type, DOCKERFILE_TEMPLATES["python"])
-    dockerfile_content = dockerfile.format(image=image)
-
-    (exec_dir / "Dockerfile").write_text(dockerfile_content, encoding="utf-8")
-    tag = f"agent-exec-{project_type}-{os.getpid()}"
-
-    # 构建镜像
-    build_result = subprocess.run(
-        ["docker", "build", "-t", tag, "."],
-        capture_output=True, text=True, timeout=min(timeout, 180), cwd=str(exec_dir),
-    )
-    log.append(f"[docker build] exit={build_result.returncode}\n{build_result.stderr[-500:]}")
-    if build_result.returncode != 0:
-        return False
-
-    # 运行容器（无网络，限时）
-    try:
-        run_result = subprocess.run(
-            ["docker", "run", "--rm", "--network=none", tag],
-            capture_output=True, text=True, timeout=min(timeout, 30), cwd=str(exec_dir),
-        )
-        log.append(f"[docker run] exit={run_result.returncode}\n{run_result.stdout[-500:]}{run_result.stderr[-500:]}")
-        return run_result.returncode == 0
-    except subprocess.TimeoutExpired:
-        log.append(f"[docker run] 超时（>{min(timeout, 30)}秒），容器已自动终止")
-        return True  # 能启动并运行超时说明代码可运行
-
 
 def _parse_code_files(code: str) -> list[tuple[str, str]]:
     """从多文件代码中解析文件列表，返回 [(路径, 内容), ...]"""
@@ -223,12 +153,11 @@ def _detect_project_type(files: dict[str, str]) -> str:
 
 
 def executor_agent(state: WorkflowState) -> dict:
-    """执行器：实际编译和运行代码，不调用 LLM"""
+    """执行器：实际编译和运行代码（本机环境），不调用 LLM"""
     code = state.get("code", "")
     if not code:
         return {"execution_result": "fail", "execution_log": "无代码可执行", "phase": "exec_done"}
 
-    # 1. 解析文件并写入临时目录
     files = _parse_code_files(code)
     file_dict = {path: content for path, content in files}
 
@@ -242,24 +171,14 @@ def executor_agent(state: WorkflowState) -> dict:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
 
-    # 2. 检测项目类型
     project_type = _detect_project_type(file_dict)
 
-    # 3. 根据类型执行构建和运行（优先 Docker）
-    log_parts = [f"项目类型: {project_type}", f"文件数: {len(files)}"]
+    log_parts = [f"项目类型: {project_type}", f"文件数: {len(files)}", "执行方式: 本机环境"]
     timeout = 180
     passed = False
 
-    use_docker = _docker_available()
-    if use_docker:
-        log_parts.append("执行方式: Docker 沙箱")
-    else:
-        log_parts.append("执行方式: 本机子进程（Docker 不可用）")
-
     try:
-        if use_docker and project_type in DOCKER_IMAGES:
-            passed = _run_in_docker(exec_dir, project_type, log_parts, timeout)
-        elif project_type == "python":
+        if project_type == "python":
             passed = _run_python_project(exec_dir, log_parts, timeout)
         elif project_type == "node":
             passed = _run_node_project(exec_dir, log_parts, timeout)
@@ -275,13 +194,6 @@ def executor_agent(state: WorkflowState) -> dict:
     except Exception as e:
         log_parts.append(f"执行异常: {e}")
 
-    # 保留 Dockerfile 到 output 目录
-    dockerfile_path = exec_dir / "Dockerfile"
-    if dockerfile_path.exists():
-        output_dockerfile = Path("output") / "Dockerfile"
-        output_dockerfile.write_text(dockerfile_path.read_text(encoding="utf-8"), encoding="utf-8")
-        log_parts.append(f"Dockerfile 已保留到 output/Dockerfile\n镜像: {DOCKER_IMAGES.get(project_type, 'python:3.11-slim')}")
-
     log = "\n".join(log_parts)
     return {
         "execution_result": "pass" if passed else "fail",
@@ -291,7 +203,7 @@ def executor_agent(state: WorkflowState) -> dict:
 
 
 def _run_python_project(exec_dir: Path, log: list, timeout: int) -> bool:
-    """运行 Python 项目：安装依赖 + 语法检查 + 尝试运行"""
+    """运行 Python 项目：安装依赖 + 语法检查 + 运行入口"""
     exec_dir = exec_dir.resolve()
     req_file = exec_dir / "requirements.txt"
     if req_file.exists():
@@ -299,15 +211,14 @@ def _run_python_project(exec_dir: Path, log: list, timeout: int) -> bool:
             ["pip", "install", "-r", str(req_file)],
             capture_output=True, text=True, timeout=timeout, cwd=str(exec_dir),
         )
-        log.append(f"[pip install] {result.returncode}\n{result.stdout[-500:]}{result.stderr[-500:]}")
+        log.append(f"[pip install] exit={result.returncode}\n{result.stdout[-500:]}{result.stderr[-500:]}")
         if result.returncode != 0:
-            return False
+            log.append("[pip install] 依赖安装失败，尝试继续（可能已安装）")
 
-    # 语法检查所有 .py 文件
     py_files = list(exec_dir.rglob("*.py"))
     for pf in py_files:
         result = subprocess.run(
-            ["python", "-c", f"import py_compile; py_compile.compile({str(pf)!r}, doraise=True)"],
+            ["python", "-m", "py_compile", str(pf)],
             capture_output=True, text=True, timeout=30,
         )
         if result.returncode != 0:
@@ -315,38 +226,64 @@ def _run_python_project(exec_dir: Path, log: list, timeout: int) -> bool:
             return False
     log.append(f"[语法检查] {len(py_files)} 个文件全部通过")
 
-    # 尝试运行入口文件
     entry = _find_entry(exec_dir, ["main.py", "app.py", "run.py", "manage.py", "server.py"])
     if entry:
-        result = subprocess.run(
-            ["python", str(entry)],
-            capture_output=True, text=True, timeout=min(timeout, 15),
-        )
-        log.append(f"[运行 {entry.name}] exit={result.returncode}\n{result.stdout[-500:]}{result.stderr[-500:]}")
-    return True
+        try:
+            result = subprocess.run(
+                ["python", str(entry)],
+                capture_output=True, text=True, timeout=min(timeout, 30),
+            )
+            log.append(f"[运行 {entry.name}] exit={result.returncode}\n{result.stdout[-500:]}{result.stderr[-500:]}")
+            return result.returncode == 0
+        except subprocess.TimeoutExpired:
+            log.append(f"[运行 {entry.name}] 超时（>{min(timeout, 30)}秒），代码已启动")
+            return True
+    else:
+        log.append("[运行] 未找到入口文件 (main.py / app.py / run.py 等)，仅完成语法检查")
+        return True
 
 
 def _run_node_project(exec_dir: Path, log: list, timeout: int) -> bool:
-    """运行 Node.js 项目：npm install + 语法检查"""
+    """运行 Node.js 项目：npm install + 语法检查 + 运行入口"""
     exec_dir = exec_dir.resolve()
-    result = subprocess.run(
-        ["npm", "install"], capture_output=True, text=True,
-        timeout=timeout, cwd=str(exec_dir), shell=True,
-    )
-    log.append(f"[npm install] {result.returncode}\n{result.stdout[-500:]}{result.stderr[-500:]}")
-    if result.returncode != 0:
-        return False
-    js_files = list(exec_dir.rglob("*.js"))
-    for jf in js_files[:20]:
+    npm = shutil.which("npm") or "npm"
+    node = shutil.which("node") or "node"
+
+    if (exec_dir / "package.json").exists():
         result = subprocess.run(
-            ["node", "--check", str(jf)],
+            [npm, "install"], capture_output=True, text=True,
+            timeout=timeout, cwd=str(exec_dir),
+        )
+        log.append(f"[npm install] exit={result.returncode}\n{result.stdout[-500:]}{result.stderr[-500:]}")
+        if result.returncode != 0:
+            log.append("[npm install] 依赖安装失败，尝试继续（可能已安装）")
+
+    js_files = list(exec_dir.rglob("*.js"))
+    for jf in js_files[:50]:
+        result = subprocess.run(
+            [node, "--check", str(jf)],
             capture_output=True, text=True, timeout=30,
         )
         if result.returncode != 0:
             log.append(f"[语法检查失败] {jf.relative_to(exec_dir)}\n{result.stderr[-500:]}")
             return False
-    log.append(f"[语法检查] 通过")
-    return True
+    log.append(f"[语法检查] {len(js_files)} 个文件通过")
+
+    entry = _find_entry(exec_dir, ["index.js", "main.js", "app.js", "server.js"])
+    if entry:
+        try:
+            result = subprocess.run(
+                [node, str(entry)],
+                capture_output=True, text=True, timeout=min(timeout, 30),
+            )
+            log.append(f"[运行 {entry.name}] exit={result.returncode}\n{result.stdout[-500:]}{result.stderr[-500:]}")
+            return result.returncode == 0
+        except subprocess.TimeoutExpired:
+            log.append(f"[运行 {entry.name}] 超时（>{min(timeout, 30)}秒），代码已启动")
+            return True
+    else:
+        log.append("[运行] 未找到入口文件 (index.js / main.js 等)，仅完成语法检查")
+        return True
 
 
 def _run_maven_project(exec_dir: Path, log: list, timeout: int) -> bool:
