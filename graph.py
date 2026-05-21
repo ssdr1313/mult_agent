@@ -14,9 +14,7 @@ from agents import (
 
 
 def route_after_validate(state: WorkflowState) -> str:
-    """编译验证后的路由：pass → 审查，fail → 回到开发"""
-    if state.get("retry_count", 0) >= state.get("max_retries", 3):
-        return "reviewer"
+    """编译验证后路由：pass→审查，fail→回到开发（不熔断，代码必须能编译）"""
     return "reviewer" if state["validation_result"] == "pass" else "developer"
 
 

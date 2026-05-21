@@ -1,10 +1,12 @@
 import argparse
 import re
+import shutil
 from pathlib import Path
 
 from docx import Document
 from langchain_core.messages import HumanMessage
 from graph import build_graph
+from agents import CODE_CACHE
 
 OUTPUT_DIR = Path("output")
 
@@ -29,21 +31,45 @@ def parse_files(text: str) -> list[tuple[str, str]]:
     return [("code.py", text)]
 
 
+def _clean_output_dir():
+    """清理旧的项目代码文件，跳过被锁定的文件（如 SQLite db）"""
+    if not OUTPUT_DIR.exists():
+        return
+    for item in list(OUTPUT_DIR.iterdir()):
+        try:
+            if item.is_dir() and item.name not in ("tests",):
+                shutil.rmtree(item)
+            elif item.is_file() and item.suffix != ".md":
+                item.unlink()
+        except PermissionError:
+            pass  # Windows 下文件被其他进程占用时跳过
+
+
 def save_outputs(state: dict):
     """将工作流产出保存到 output/ 目录"""
+    # 优先从验证器的代码缓存读取（已合并多次重试的增量修改），否则从原始输出解析
+    if CODE_CACHE.exists():
+        code_files = []
+        for p in CODE_CACHE.rglob("*"):
+            if p.is_file():
+                rel = str(p.relative_to(CODE_CACHE)).replace("\\", "/")
+                code_files.append((rel, p.read_text(encoding="utf-8")))
+    else:
+        code_files = parse_files(state.get("code", ""))
+
+    _clean_output_dir()
     OUTPUT_DIR.mkdir(exist_ok=True)
 
     if state.get("requirement"):
         (OUTPUT_DIR / "requirement.md").write_text(state["requirement"], encoding="utf-8")
     if state.get("design"):
         (OUTPUT_DIR / "design.md").write_text(state["design"], encoding="utf-8")
-    if state.get("code"):
-        files = parse_files(state["code"])
-        for file_path, content in files:
+    if code_files:
+        for file_path, content in code_files:
             target = OUTPUT_DIR / file_path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
-        print(f"  生成 {len(files)} 个文件")
+        print(f"  生成 {len(code_files)} 个文件")
     if state.get("unit_test_code"):
         # 测试代码保存到 output/tests/ 子目录
         test_dir = OUTPUT_DIR / "tests"
@@ -186,7 +212,7 @@ def main():
             "frontend_test_report": "",
             "delivery_report": "",
             "retry_count": 0,
-            "max_retries": 5,
+            "max_retries": 3,
         },
         stream_mode="updates",
     ):
