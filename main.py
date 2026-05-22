@@ -6,7 +6,7 @@ from pathlib import Path
 from docx import Document
 from langchain_core.messages import HumanMessage
 from graph import build_graph
-from agents import CODE_CACHE
+
 
 OUTPUT_DIR = Path("output")
 
@@ -20,11 +20,18 @@ def read_document(path: Path) -> str:
 
 
 def parse_files(text: str) -> list[tuple[str, str]]:
-    """从多文件输出中解析文件列表，返回 [(路径, 内容), ...]"""
-    pattern = r"###\s*FILE:\s*(\S+)\s*\n\s*```\w*\s*\n(.*?)```"
+    """从多文件输出中解析文件列表，返回 [(路径, 内容), ...]。
+    使用 ### FILE: 标记作为文件边界，容忍文件内容中包含代码块（如 markdown 内的 ```）。"""
+    pattern = r"###\s*FILE:\s*(\S+)\s*\n\s*```\w*\s*\n(.*?)(?=\n\s*###\s*FILE:|\Z)"
     matches = re.findall(pattern, text, re.DOTALL)
     if matches:
-        return [(path.strip(), content.strip()) for path, content in matches]
+        results = []
+        for path, content in matches:
+            content = content.strip()
+            if content.endswith("```"):
+                content = content[:-3].strip()
+            results.append((path.strip(), content))
+        return results
     match = re.search(r"```(?:python|java|go|ts|js|tsx|jsx)?\s*\n(.*?)```", text, re.DOTALL)
     if match:
         return [("code.py", match.group(1).strip())]
@@ -37,7 +44,7 @@ def _clean_output_dir():
         return
     for item in list(OUTPUT_DIR.iterdir()):
         try:
-            if item.is_dir() and item.name not in ("tests",):
+            if item.is_dir() and item.name not in ("tests", "project", "external", ".code_cache", ".validate"):
                 shutil.rmtree(item)
             elif item.is_file() and item.suffix != ".md":
                 item.unlink()
@@ -47,15 +54,7 @@ def _clean_output_dir():
 
 def save_outputs(state: dict):
     """将工作流产出保存到 output/ 目录"""
-    # 优先从验证器的代码缓存读取（已合并多次重试的增量修改），否则从原始输出解析
-    if CODE_CACHE.exists():
-        code_files = []
-        for p in CODE_CACHE.rglob("*"):
-            if p.is_file():
-                rel = str(p.relative_to(CODE_CACHE)).replace("\\", "/")
-                code_files.append((rel, p.read_text(encoding="utf-8")))
-    else:
-        code_files = parse_files(state.get("code", ""))
+    code_files = parse_files(state.get("code", ""))
 
     _clean_output_dir()
     OUTPUT_DIR.mkdir(exist_ok=True)
@@ -89,7 +88,6 @@ PHASE_NAMES = {
     "product": "需求分析",
     "design": "设计文档",
     "code": "代码生成",
-    "validate": "编译验证",
     "review": "代码审查",
     "test": "单元测试生成",
     "build": "构建与测试",
@@ -98,18 +96,17 @@ PHASE_NAMES = {
     "done": "完成",
 }
 
-STOP_ORDER = ["product", "design", "code", "validate", "review", "test", "build", "frontend", "done"]
+STOP_ORDER = ["product", "design", "code", "review", "test", "build", "frontend", "done"]
 
 # 用于 --stop-at 判断：每个 phase 值对应的流程位置（越大越靠后）
 _PHASE_POS = {
     "product": 0, "design": 1, "code": 2,
-    "validate": 3, "review": 4, "test": 5,
-    "build": 6, "frontend": 7, "devops": 8, "done": 9,
+    "review": 3, "test": 4,
+    "build": 5, "frontend": 6, "devops": 7, "done": 8,
 }
 
 # 各阶段对应的 pass/fail 结果字段
 _PHASE_RESULT_KEY = {
-    "validate": "validation_result",
     "review": "review_result",
     "build": "build_result",
     "frontend": "frontend_test_result",
@@ -134,9 +131,6 @@ def print_phase(phase: str, state: dict):
         print(state["design"])
     elif phase == "code" and state.get("code"):
         print(state["code"])
-    elif phase == "validate":
-        print(f"编译验证结果: {state.get('validation_result', '?')}")
-        print(state.get("validation_log", ""))
     elif phase == "review":
         print(f"审查结果: {state.get('review_result', '?')}")
         print(state.get("review_comment", ""))
@@ -171,7 +165,7 @@ def main():
 
     print("=" * 60)
     print("  多 Agent 协作工作流")
-    print("  需求分析 → 设计 → 代码生成 → 编译验证 → 审查 → 测试生成 → 构建测试 → 前端测试 → 交付")
+    print("  需求分析 → 设计 → 代码生成 → 审查 → 测试生成 → 构建测试 → 前端测试 → 交付")
     print("=" * 60)
     print()
 
@@ -200,8 +194,6 @@ def main():
             "requirement": "",
             "design": "",
             "code": "",
-            "validation_result": "",
-            "validation_log": "",
             "review_result": "",
             "review_comment": "",
             "unit_test_code": "",

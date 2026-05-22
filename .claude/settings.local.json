@@ -3,7 +3,29 @@
     "allow": [
       "Bash(python -c \"import sys; print\\(sys.getdefaultencoding\\(\\)\\); print\\(sys.getfilesystemencoding\\(\\)\\)\")",
       "Bash(python *)",
-      "Bash(docker *)"
+      "Bash(docker *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(git rm *)",
+      "Bash(pip install *)",
+      "Bash(uvicorn app.main:app --host 127.0.0.1 --port 8000)",
+      "Bash(npm install *)",
+      "Bash(curl -s http://127.0.0.1:8000/api/auth/login -X POST -H \"Content-Type: application/json\" -d '{\"username\":\"admin\",\"password\":\"admin123\"}')",
+      "Bash(curl -s http://localhost:5173/)",
+      "Bash(curl -s http://localhost:5173/api/auth/login -X POST -H \"Content-Type: application/json\" -d '{\"username\":\"admin\",\"password\":\"admin123\"}')",
+      "Bash(npx vue-tsc *)",
+      "Bash(tasklist)",
+      "Bash(curl -s http://localhost:8000/docs)",
+      "Bash(echo \"=== Test Login ===\")",
+      "Bash(curl -s -X POST http://localhost:8000/api/login -H \"Content-Type: application/json\" -d '{\"username\":\"admin\",\"password\":\"Admin@123\"}')",
+      "Bash(echo \"\")",
+      "Bash(pkill -f \"python main.py\")",
+      "Bash(rm -f app.db test.db logs/error.log)",
+      "Bash(curl -s http://localhost:8000/api/login -X POST -H \"Content-Type: application/json\" -d '{\"username\":\"admin\",\"password\":\"Admin@123\"}')",
+      "Bash(npx vite *)",
+      "Bash(curl -s http://localhost:3000)",
+      "Bash(curl -s http://localhost:3000/api/login -X POST -H \"Content-Type: application/json\" -d '{\"username\":\"admin\",\"password\":\"Admin@123\"}')"
     ]
   }
 }

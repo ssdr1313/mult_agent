@@ -10,8 +10,6 @@ class WorkflowState(TypedDict):
     requirement: str
     design: str
     code: str
-    validation_result: str  # "pass" | "fail" — 语法/编译检查结果
-    validation_log: str     # 编译检查的 stdout+stderr
     review_result: str      # "pass" | "fail"
     review_comment: str
     unit_test_code: str     # tester 生成的单元测试代码

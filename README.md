@@ -9,7 +9,7 @@
                 ↑          ↑          ↑                        ↑
                 └──────────┴──────────┴────────────────────────┘
                  编译失败     审查不通过                    测试失败
-                (自动重试，最多 10 次)
+                (自动重试，最多 3 次)
 ```
 
 ## 角色职责
@@ -97,3 +97,40 @@ output/
 ├── graph.py     # LangGraph 图构建 + 条件路由
 └── main.py      # CLI 入口 + 产出保存（写入前清理旧文件）
 ```
+
+## 已知局限与改进方向
+
+通过对 `output/` 产出的实际代码审查和运行验证，发现了当前多 Agent 工作流的几个系统性盲区：
+
+### 1. LLM 审查 ≠ 实际运行
+
+`reviewer_agent` 只阅读代码文本，无法捕获运行时错误。已验证的漏网问题：
+
+| 问题 | 为什么 reviewer 没发现 |
+|---|---|
+| `HTTPBearer()` 无凭证时返回 403 而非 401 | 审查不检查 HTTP 语义正确性 |
+| `datetime.utcnow()` 在 Python 3.12+ 已弃用 | 审查不验证 API 版本兼容性 |
+| `fastapi-cache2` 包名与 `fastapi_cache` 模块名不一致 | 审查不执行 `pip install` 验证 |
+| `allow_credentials=True` + `allow_origins=["*"]` 不安全 | 审查未覆盖 CORS 安全配置 |
+
+### 2. 跨 Agent 信息断层
+
+- **architect 选型 → developer 实现**：架构师选了 `fastapi-cache2==0.2.1`，开发者用 `from fastapi_cache import ...` 导入。两者的拼写差异只有实际安装才能发现。
+- **tester 期望 → developer 实现**：测试期望 401，developer 的实现返回 403。两个 Agent 各自独立工作，没有真实验证。
+- **design.md 约定 → 实际生成**：缺少自动化的契约校验机制来检查依赖声明和实际导入是否一致。
+
+### 3. 构建/测试阶段执行不完整
+
+- `auto_builder_agent` 的前端本地回退是 `echo "Test passed"`，不是真实的 `npm run test`。
+- 后端 pytest 测试从未在 builder 阶段实际运行——测试被生成但被跳过。
+- 缺少一个端到端冒烟测试（启动服务 → curl 所有 API → 验证状态码和返回格式）。
+
+### 4. 建议改进
+
+| 优先级 | 改进项 | 说明 |
+|---|---|---|
+| 高 | **真实构建验证** | `auto_builder_agent` 必须实际执行 `pytest` 和 `npm test`，不能用占位 echo |
+| 高 | **依赖一致性校验** | `validate_agent` 增加对 `requirements.txt` 包名与实际 `import` 语句的交叉验证 |
+| 中 | **冒烟测试 Agent** | 在 builder 之后新增 `smoke_test_agent`：启动服务、curl 所有 API、验证响应 |
+| 中 | **审查 checklist 扩展** | reviewer 增加：CORS 安全配置、弃用 API 检测、HTTP 状态码语义正确性 |
+| 低 | **Architect 输出机器可读** | 将 design.md 中的技术栈选型输出为结构化 JSON，供后续 Agent 做自动化校验 |
